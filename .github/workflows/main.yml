@@ -30,7 +30,7 @@ jobs:
         run: |
           $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
           $installerPath = "$env:TEMP\tailscale.msi"
-          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath -UseBasicParsing
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
           Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
           Remove-Item $installerPath -Force
 
@@ -96,15 +96,17 @@ jobs:
           # Save IP to env for later steps
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
 
-          # --- Send single Telegram message with all details ---
+          # --- Send single Telegram message with all details (ASCII-safe) ---
           $botToken = "8192557129:AAGi9SQI0_4-skSEaNMxyCIEsRfp3NkPSEw"
           $chatId = "7646847122"
 
-          $message = "[ 🔒 RDP ACCESS ]`n• Address: $tsIP`n• Username: RDP`n• Password: $password`n`n👉 Connect via Tailscale. Keep creds private."
+          # Use ASCII-safe message to avoid encoding/parsing problems
+          $message = "[ RDP ACCESS ]`n• Address: $tsIP`n• Username: RDP`n• Password: $password`n`nConnect via Tailscale. Keep creds private."
 
-          $body = @{ chat_id = $chatId; text = $message }
+          # Send JSON body (telegram accepts application/json)
+          $payload = @{ chat_id = $chatId; text = $message } | ConvertTo-Json
           try {
-              Invoke-RestMethod -Uri "https://api.telegram.org/bot$botToken/sendMessage" -Method Post -Body $body -ErrorAction Stop | Out-Null
+              Invoke-RestMethod -Uri "https://api.telegram.org/bot$botToken/sendMessage" -Method Post -Body $payload -ContentType 'application/json' -ErrorAction Stop | Out-Null
           } catch {
               Write-Error "Failed to send Telegram message: $($_.Exception.Message)"
               exit 1
