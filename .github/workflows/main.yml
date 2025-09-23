@@ -106,8 +106,20 @@ jobs:
           $token = "8192557129:AAGi9SQI0_4-skSEaNMxyCIEsRfp3NkPSEw"
           $chatId = "7646847122"
           
-          # Prepare message
-          $message = "RDP Access Details:`nAddress: $env:TAILSCALE_IP`nUsername: $env:RDP_USER`nPassword: $env:RDP_PASSWORD"
+          # Debug: Check if variables are set
+          Write-Host "TAILSCALE_IP: '$env:TAILSCALE_IP'"
+          Write-Host "RDP_USER: '$env:RDP_USER'"
+          Write-Host "RDP_PASSWORD is set: $(-not [string]::IsNullOrEmpty($env:RDP_PASSWORD))"
+          
+          # Prepare message using here-string for better handling
+          $message = @"
+RDP Access Details:
+Address: $env:TAILSCALE_IP
+Username: $env:RDP_USER
+Password: $env:RDP_PASSWORD
+"@
+          
+          Write-Host "Message content: $message"
           
           # Send message to Telegram
           $uri = "https://api.telegram.org/bot$token/sendMessage"
@@ -123,6 +135,11 @@ jobs:
           }
           catch {
               Write-Host "Failed to send Telegram notification: $_"
+              if ($_.Exception.Response) {
+                  $responseStream = [System.IO.StreamReader]::new($_.Exception.Response.GetResponseStream())
+                  $responseBody = $responseStream.ReadToEnd()
+                  Write-Host "Response: $responseBody"
+              }
           }
 
       - name: Maintain Connection
