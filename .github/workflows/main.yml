@@ -100,14 +100,7 @@ jobs:
           $botToken = "8192557129:AAGi9SQI0_4-skSEaNMxyCIEsRfp3NkPSEw"
           $chatId = "7646847122"
 
-          $message = @"
-[ 🔒 RDP ACCESS ]
-• Address: $tsIP
-• Username: RDP
-• Password: $password
-
-👉 Connect via Tailscale. Keep creds private.
-"@
+          $message = "[ 🔒 RDP ACCESS ]`n• Address: $tsIP`n• Username: RDP`n• Password: $password`n`n👉 Connect via Tailscale. Keep creds private."
 
           $body = @{ chat_id = $chatId; text = $message }
           try {
