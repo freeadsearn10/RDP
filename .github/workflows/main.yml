@@ -19,6 +19,7 @@ jobs:
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
                              -Name "SecurityLayer" -Value 0 -Force
 
+          # Remove existing firewall rule and add new one
           netsh advfirewall firewall delete rule name="RDP-Tailscale"
           netsh advfirewall firewall add rule name="RDP-Tailscale" `
             dir=in action=allow protocol=TCP localport=3389
@@ -29,11 +30,10 @@ jobs:
         run: |
           Add-Type -AssemblyName System.Security
           $charSet = @{
-              Upper   = [char[]](65..90)
-              Lower   = [char[]](97..122)
-              Number  = [char[]](48..57)
-              Special = ([char[]](33..47) + [char[]](58..64) +
-                         [char[]](91..96) + [char[]](123..126))
+              Upper   = [char[]](65..90)      # A-Z
+              Lower   = [char[]](97..122)     # a-z
+              Number  = [char[]](48..57)      # 0-9
+              Special = ([char[]](33..47) + [char[]](58..64) + [char[]](91..96) + [char[]](123..126)) # Special chars
           }
           $rawPassword = @()
           $rawPassword += $charSet.Upper | Get-Random -Count 4
@@ -97,7 +97,7 @@ RDP Access Details:
 Address: $env:TAILSCALE_IP
 Username: RDP
 Password: $env:RDP_CREDS
-"@
+"@"
 
           $url = "https://api.telegram.org/bot$token/sendMessage"
           $body = @{
