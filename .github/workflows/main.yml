@@ -106,13 +106,31 @@ jobs:
           $token = "8192557129:AAGi9SQI0_4-skSEaNMxyCIEsRfp3NkPSEw"
           $chatId = "7646847122"
           
-          # Debug: Check if variables are set
-          Write-Host "TAILSCALE_IP: '$env:TAILSCALE_IP'"
-          Write-Host "RDP_USER: '$env:RDP_USER'"
-          Write-Host "RDP_PASSWORD is set: $(-not [string]::IsNullOrEmpty($env:RDP_PASSWORD))"
+          # Get current timestamp for the message
+          $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
           
-          # Prepare message using string concatenation
-          $message = "RDP Access Details:`nAddress: $env:TAILSCALE_IP`nUsername: $env:RDP_USER`nPassword: $env:RDP_PASSWORD"
+          # Create stylish message with emojis
+          $message = @"
+🔒 *RDP ACCESS DETAILS* 🔒
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🌐 *Address*: $env:TAILSCALE_IP
+👤 *Username*: $env:RDP_USER
+🔑 *Password*: $env:RDP_PASSWORD
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⏰ *Created*: $timestamp
+🖥️ *OS*: Windows Latest
+🔧 *Status*: Active
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💡 *Instructions*: 
+1. Use Remote Desktop Client
+2. Enter the address above
+3. Use provided credentials
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️ *Note*: 
+- This session will expire in 6 hours
+- Do not share these credentials
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"@
           
           Write-Host "Message content: $message"
           
@@ -120,6 +138,7 @@ jobs:
           $bodyObject = @{
               chat_id = $chatId
               text = $message
+              parse_mode = "Markdown"
           }
           $jsonBody = $bodyObject | ConvertTo-Json -Depth 10
           
