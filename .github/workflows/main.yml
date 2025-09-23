@@ -34,9 +34,10 @@ jobs:
           Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
           Remove-Item $installerPath -Force
 
-      - name: Create RDP User and Send Credentials to Telegram
+      - name: Create RDP User, Start Tailscale and Send All Details to Telegram
         shell: powershell
         run: |
+          # --- Generate secure random password ---
           $charSet = @{
               Upper   = [char[]](65..90)
               Lower   = [char[]](97..122)
@@ -50,6 +51,7 @@ jobs:
           $rawPassword += $charSet.Special | Get-Random -Count 4
           $password = -join ($rawPassword | Sort-Object { Get-Random })
 
+          # --- Create or update local user "RDP" ---
           if (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue) {
               $securePass = ConvertTo-SecureString $password -AsPlainText -Force
               Set-LocalUser -Name "RDP" -Password $securePass
@@ -66,49 +68,47 @@ jobs:
               exit 1
           }
 
-          $botToken = "8192557129:AAGi9SQI0_4-skSEaNMxyCIEsRfp3NkPSEw"
-          $chatId = "7646847122"
-          $message = "RDP Credentials:`nUser: RDP`nPassword: $password`nNote: Tailscale IP will follow when assigned."
-          $body = @{ chat_id = $chatId; text = $message }
-          try {
-              Invoke-RestMethod -Uri "https://api.telegram.org/bot$botToken/sendMessage" -Method Post -Body $body -ErrorAction Stop | Out-Null
-          } catch {
-              Write-Error "Failed to send Telegram message: $($_.Exception.Message)"
-              exit 1
-          }
-
-      - name: Establish Tailscale Connection
-        shell: powershell
-        run: |
+          # --- Ensure tailscale binary exists ---
           $tsExe = Join-Path $env:ProgramFiles "Tailscale\tailscale.exe"
           if (-not (Test-Path $tsExe)) {
-              Write-Error "tailscale.exe not found at $tsExe"
+              Write-Error "tailscale.exe not found at $tsExe - make sure the Install Tailscale step succeeded"
               exit 1
           }
+
+          # --- Start Tailscale with auth key from repo secrets ---
           & $tsExe up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname="gh-runner-$env:GITHUB_RUN_ID" | Out-Null
 
+          # --- Wait for Tailscale IPv4 address ---
           $tsIP = $null
           $retries = 0
-          while (-not $tsIP -and $retries -lt 12) {
+          while (-not $tsIP -and $retries -lt 20) {
               Start-Sleep -Seconds 5
               $tsIP = & $tsExe ip -4
-              $tsIP = $tsIP.Trim()
+              if ($tsIP) { $tsIP = $tsIP.Trim() }
               $retries++
           }
 
           if (-not $tsIP) {
-              Write-Error "Tailscale IP not assigned. Exiting."
+              Write-Error "Tailscale IP not assigned after waiting. Exiting."
               exit 1
           }
+
+          # Save IP to env for later steps
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
 
-      - name: Send Tailscale IP to Telegram
-        shell: powershell
-        run: |
+          # --- Send single Telegram message with all details ---
           $botToken = "8192557129:AAGi9SQI0_4-skSEaNMxyCIEsRfp3NkPSEw"
           $chatId = "7646847122"
-          $ip = $env:TAILSCALE_IP
-          $message = "RDP Host is up.`nTailscale IP: $ip`nUser: RDP`n(Password was sent earlier.)"
+
+          $message = @"
+[ 🔒 RDP ACCESS ]
+• Address: $tsIP
+• Username: RDP
+• Password: $password
+
+👉 Connect via Tailscale. Keep creds private.
+"@
+
           $body = @{ chat_id = $chatId; text = $message }
           try {
               Invoke-RestMethod -Uri "https://api.telegram.org/bot$botToken/sendMessage" -Method Post -Body $body -ErrorAction Stop | Out-Null
