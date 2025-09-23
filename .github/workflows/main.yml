@@ -102,16 +102,16 @@ jobs:
           $token = "8192557129:AAGi9SQI0_4-skSEaNMxyCIEsRfp3NkPSEw"
           $chat_id = "7646847122"
           $message = @"
-          RDP Access Details:
-          Address: $env:TAILSCALE_IP
-          Username: RDP
-          Password: $env:RDP_CREDS
-          "@
+RDP Access Details:
+Address: $env:TAILSCALE_IP
+Username: RDP
+Password: $env:RDP_CREDS
+"@
+
           $url = "https://api.telegram.org/bot$token/sendMessage"
           $body = @{
               chat_id = $chat_id
               text = $message
-              parse_mode = "Markdown"
           }
           Invoke-RestMethod -Uri $url -Method Post -Body $body
 
