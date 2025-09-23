@@ -116,24 +116,31 @@ jobs:
           
           Write-Host "Message content: $message"
           
-          # Send message to Telegram
-          $uri = "https://api.telegram.org/bot$token/sendMessage"
-          $body = @{
+          # Create body object and convert to JSON to handle special characters
+          $bodyObject = @{
               chat_id = $chatId
               text = $message
-              parse_mode = "Markdown"
           }
+          $jsonBody = $bodyObject | ConvertTo-Json -Depth 10
+          
+          Write-Host "JSON Body: $jsonBody"
+          
+          # Send message to Telegram
+          $uri = "https://api.telegram.org/bot$token/sendMessage"
           
           try {
-              $response = Invoke-RestMethod -Uri $uri -Method Post -Body $body -ContentType "application/json"
+              $response = Invoke-RestMethod -Uri $uri -Method Post -Body $jsonBody -ContentType "application/json"
               Write-Host "Telegram notification sent successfully"
           }
           catch {
               Write-Host "Failed to send Telegram notification: $_"
+              # Modern error handling for HTTP responses
               if ($_.Exception.Response) {
-                  $responseStream = [System.IO.StreamReader]::new($_.Exception.Response.GetResponseStream())
-                  $responseBody = $responseStream.ReadToEnd()
+                  $responseStream = $_.Exception.Response.Content.ReadAsStreamAsync().Result
+                  $reader = [System.IO.StreamReader]::new($responseStream)
+                  $responseBody = $reader.ReadToEnd()
                   Write-Host "Response: $responseBody"
+                  $reader.Close()
               }
           }
 
