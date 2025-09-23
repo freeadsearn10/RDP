@@ -122,7 +122,7 @@ Password: $env:RDP_CREDS
           Write-Host "Username: RDP"
           Write-Host "Password: $env:RDP_CREDS"
           Write-Host "==================`n"
-          
+
           while ($true) {
               Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
               Start-Sleep -Seconds 300
