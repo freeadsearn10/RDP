@@ -10,8 +10,8 @@ jobs:
 
     steps:
       - name: Configure Core RDP Settings
+        shell: powershell
         run: |
-          # Enable Remote Desktop and disable Network Level Authentication (if needed)
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
                              -Name "fDenyTSConnections" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
@@ -19,21 +19,29 @@ jobs:
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
                              -Name "SecurityLayer" -Value 0 -Force
 
-          # Remove existing firewall rule and add new one
-          netsh advfirewall firewall delete rule name="RDP-Tailscale"
+          netsh advfirewall firewall delete rule name="RDP-Tailscale" | Out-Null
           netsh advfirewall firewall add rule name="RDP-Tailscale" `
-            dir=in action=allow protocol=TCP localport=3389
+            dir=in action=allow protocol=TCP localport=3389 | Out-Null
 
           Restart-Service -Name TermService -Force
 
-      - name: Create RDP User with Secure Password
+      - name: Install Tailscale
+        shell: powershell
         run: |
-          Add-Type -AssemblyName System.Security
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath -UseBasicParsing
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+          Remove-Item $installerPath -Force
+
+      - name: Create RDP User and Send Credentials to Telegram
+        shell: powershell
+        run: |
           $charSet = @{
-              Upper   = [char[]](65..90)      # A-Z
-              Lower   = [char[]](97..122)     # a-z
-              Number  = [char[]](48..57)      # 0-9
-              Special = ([char[]](33..47) + [char[]](58..64) + [char[]](91..96) + [char[]](123..126)) # Special chars
+              Upper   = [char[]](65..90)
+              Lower   = [char[]](97..122)
+              Number  = [char[]](48..57)
+              Special = ([char[]](33..47) + [char[]](58..64) + [char[]](91..96) + [char[]](123..126))
           }
           $rawPassword = @()
           $rawPassword += $charSet.Upper | Get-Random -Count 4
@@ -41,80 +49,95 @@ jobs:
           $rawPassword += $charSet.Number | Get-Random -Count 4
           $rawPassword += $charSet.Special | Get-Random -Count 4
           $password = -join ($rawPassword | Sort-Object { Get-Random })
-          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
-          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
-          
-          echo "RDP_CREDS=$password" >> $env:GITHUB_ENV
-          
-          if (-not (Get-LocalUser -Name "RDP")) {
+
+          if (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue) {
+              $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+              Set-LocalUser -Name "RDP" -Password $securePass
+          } else {
+              $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+              New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
+          }
+
+          Add-LocalGroupMember -Group "Administrators" -Member "RDP" -ErrorAction SilentlyContinue
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP" -ErrorAction SilentlyContinue
+
+          if (-not (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue)) {
               Write-Error "User creation failed"
               exit 1
           }
 
-      - name: Install Tailscale
-        run: |
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
-          $installerPath = "$env:TEMP\tailscale.msi"
-          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
-          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
-          Remove-Item $installerPath -Force
+          $botToken = "8192557129:AAGi9SQI0_4-skSEaNMxyCIEsRfp3NkPSEw"
+          $chatId = "7646847122"
+          $message = "RDP Credentials:`nUser: RDP`nPassword: $password`nNote: Tailscale IP will follow when assigned."
+          $body = @{ chat_id = $chatId; text = $message }
+          try {
+              Invoke-RestMethod -Uri "https://api.telegram.org/bot$botToken/sendMessage" -Method Post -Body $body -ErrorAction Stop | Out-Null
+          } catch {
+              Write-Error "Failed to send Telegram message: $($_.Exception.Message)"
+              exit 1
+          }
 
       - name: Establish Tailscale Connection
+        shell: powershell
         run: |
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
+          $tsExe = Join-Path $env:ProgramFiles "Tailscale\tailscale.exe"
+          if (-not (Test-Path $tsExe)) {
+              Write-Error "tailscale.exe not found at $tsExe"
+              exit 1
+          }
+          & $tsExe up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname="gh-runner-$env:GITHUB_RUN_ID" | Out-Null
+
           $tsIP = $null
           $retries = 0
-          while (-not $tsIP -and $retries -lt 10) {
-              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+          while (-not $tsIP -and $retries -lt 12) {
               Start-Sleep -Seconds 5
+              $tsIP = & $tsExe ip -4
+              $tsIP = $tsIP.Trim()
               $retries++
           }
+
           if (-not $tsIP) {
               Write-Error "Tailscale IP not assigned. Exiting."
               exit 1
           }
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
 
-      - name: Verify RDP Accessibility
+      - name: Send Tailscale IP to Telegram
+        shell: powershell
         run: |
-          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
-          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
+          $botToken = "8192557129:AAGi9SQI0_4-skSEaNMxyCIEsRfp3NkPSEw"
+          $chatId = "7646847122"
+          $ip = $env:TAILSCALE_IP
+          $message = "RDP Host is up.`nTailscale IP: $ip`nUser: RDP`n(Password was sent earlier.)"
+          $body = @{ chat_id = $chatId; text = $message }
+          try {
+              Invoke-RestMethod -Uri "https://api.telegram.org/bot$botToken/sendMessage" -Method Post -Body $body -ErrorAction Stop | Out-Null
+          } catch {
+              Write-Error "Failed to send Telegram message: $($_.Exception.Message)"
+              exit 1
+          }
+
+      - name: Verify RDP Accessibility
+        shell: powershell
+        run: |
+          $ip = $env:TAILSCALE_IP
+          Write-Host "Testing RDP connectivity to $ip:3389"
+          $testResult = Test-NetConnection -ComputerName $ip -Port 3389 -WarningAction SilentlyContinue
           if (-not $testResult.TcpTestSucceeded) {
               Write-Error "TCP connection to RDP port 3389 failed"
               exit 1
           }
           Write-Host "TCP connectivity successful!"
 
-      - name: Send RDP info to Telegram
-        run: |
-          $token = "8192557129:AAGi9SQI0_4-skSEaNMxyCIEsRfp3NkPSEw"
-          $chat_id = "7646847122"
-
-          $message = @"
-RDP Access Details:
-Address: $env:TAILSCALE_IP
-Username: RDP
-Password: $env:RDP_CREDS
-"@"
-
-          $url = "https://api.telegram.org/bot$token/sendMessage"
-          $body = @{
-              chat_id = $chat_id
-              text = $message
-          }
-          Invoke-RestMethod -Uri $url -Method Post -Body $body
-
       - name: Maintain Connection
+        shell: powershell
         run: |
           Write-Host "`n=== RDP ACCESS ==="
           Write-Host "Address: $env:TAILSCALE_IP"
           Write-Host "Username: RDP"
-          Write-Host "Password: $env:RDP_CREDS"
+          Write-Host "Password: (sent to Telegram)"
           Write-Host "==================`n"
-
           while ($true) {
-              Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
+              Write-Host "[$(Get-Date)] RDP Active - Use Cancel workflow in GitHub Actions to stop"
               Start-Sleep -Seconds 300
           }
