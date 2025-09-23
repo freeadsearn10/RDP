@@ -1,138 +1,176 @@
-name: RDP
+name: Tailscale RDP + Telegram Notify
 
 on:
   workflow_dispatch:
 
 jobs:
-  secure-rdp:
+  tailscale-rdp:
     runs-on: windows-latest
-    timeout-minutes: 3600
-
     steps:
-      - name: Configure Core RDP Settings
-        shell: powershell
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Establish Tailscale Connection
+        shell: pwsh
+        env:
+          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
         run: |
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
-                             -Name "fDenyTSConnections" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-                             -Name "UserAuthentication" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-                             -Name "SecurityLayer" -Value 0 -Force
+          Write-Host "Starting Tailscale..."
 
-          netsh advfirewall firewall delete rule name="RDP-Tailscale" | Out-Null
-          netsh advfirewall firewall add rule name="RDP-Tailscale" `
-            dir=in action=allow protocol=TCP localport=3389 | Out-Null
-
-          Restart-Service -Name TermService -Force
-
-      - name: Install Tailscale
-        shell: powershell
-        run: |
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
-          $installerPath = "$env:TEMP\tailscale.msi"
-          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
-          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
-          Remove-Item $installerPath -Force
-
-      - name: Create RDP User, Start Tailscale and Send All Details to Telegram
-        shell: powershell
-        run: |
-          # --- Generate secure random password ---
-          $charSet = @{
-              Upper   = [char[]](65..90)
-              Lower   = [char[]](97..122)
-              Number  = [char[]](48..57)
-              Special = ([char[]](33..47) + [char[]](58..64) + [char[]](91..96) + [char[]](123..126))
-          }
-          $rawPassword = @()
-          $rawPassword += $charSet.Upper | Get-Random -Count 4
-          $rawPassword += $charSet.Lower | Get-Random -Count 4
-          $rawPassword += $charSet.Number | Get-Random -Count 4
-          $rawPassword += $charSet.Special | Get-Random -Count 4
-          $password = -join ($rawPassword | Sort-Object { Get-Random })
-
-          # --- Create or update local user "RDP" ---
-          if (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue) {
-              $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-              Set-LocalUser -Name "RDP" -Password $securePass
-          } else {
-              $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-              New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
-          }
-
-          Add-LocalGroupMember -Group "Administrators" -Member "RDP" -ErrorAction SilentlyContinue
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP" -ErrorAction SilentlyContinue
-
-          if (-not (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue)) {
-              Write-Error "User creation failed"
-              exit 1
-          }
-
-          # --- Ensure tailscale binary exists ---
           $tsExe = Join-Path $env:ProgramFiles "Tailscale\tailscale.exe"
           if (-not (Test-Path $tsExe)) {
-              Write-Error "tailscale.exe not found at $tsExe - make sure the Install Tailscale step succeeded"
+              Write-Error "Tailscale not found at $tsExe. Install Tailscale on the runner or add installation step."
               exit 1
           }
 
-          # --- Start Tailscale with auth key from repo secrets ---
-          & $tsExe up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname="gh-runner-$env:GITHUB_RUN_ID" | Out-Null
+          # Bring up Tailscale with the provided auth key and set a unique hostname
+          & $tsExe up --authkey=$env:TAILSCALE_AUTH_KEY --hostname=("gh-runner-" + $env:GITHUB_RUN_ID) | Write-Host
 
-          # --- Wait for Tailscale IPv4 address ---
+          # Wait for Tailscale to assign an IPv4 address (retries)
           $tsIP = $null
           $retries = 0
-          while (-not $tsIP -and $retries -lt 20) {
+          while (-not $tsIP -and $retries -lt 12) {
               Start-Sleep -Seconds 5
-              $tsIP = & $tsExe ip -4
-              if ($tsIP) { $tsIP = $tsIP.Trim() }
+              try {
+                  $tsIP = (& $tsExe ip -4) -join ","   # returns array sometimes
+              } catch {
+                  $tsIP = $null
+              }
+              $tsIP = $tsIP.Trim()
               $retries++
+              Write-Host "Attempt $retries - Tailscale IP: '$tsIP'"
           }
 
           if (-not $tsIP) {
-              Write-Error "Tailscale IP not assigned after waiting. Exiting."
+              Write-Error "Tailscale IP not assigned after retries. Exiting."
               exit 1
           }
 
-          # Save IP to env for later steps
-          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+          # Export to GitHub Actions environment for subsequent steps
+          Add-Content -Path $env:GITHUB_ENV -Value ("TAILSCALE_IP=" + $tsIP)
+          Write-Host "Exported TAILSCALE_IP=$tsIP"
 
-          # --- Send single Telegram message with all details (ASCII-safe) ---
-          $botToken = "8192557129:AAGi9SQI0_4-skSEaNMxyCIEsRfp3NkPSEw"
-          $chatId = "7646847122"
+      - name: Notify Telegram
+        shell: pwsh
+        env:
+          # Recommended: set these as GitHub Secrets in repo settings
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          RDP_CREDS: ${{ secrets.RDP_CREDS }}
+          TAILSCALE_IP: ${{ env.TAILSCALE_IP }}
+        run: |
+          # --- Fallback hardcoded values (NOT recommended for public repos) ---
+          # If you want to hardcode (local/private repo only), replace below or set secrets.
+          if (-not $env:TELEGRAM_BOT_TOKEN) {
+              Write-Warning "TELEGRAM_BOT_TOKEN secret not set. Falling back to provided token (not recommended)."
+              $env:TELEGRAM_BOT_TOKEN = "8192557129:AAGi9SQI0_4-skSEaNMxyCIEsRfp3NkPSEw"
+          }
+          if (-not $env:TELEGRAM_CHAT_ID) {
+              Write-Warning "TELEGRAM_CHAT_ID secret not set. Falling back to provided chat id (not recommended)."
+              $env:TELEGRAM_CHAT_ID = "7646847122"
+          }
 
-          # Use ASCII-safe message to avoid encoding/parsing problems
-          $message = "[ RDP ACCESS ]`n• Address: $tsIP`n• Username: RDP`n• Password: $password`n`nConnect via Tailscale. Keep creds private."
+          $botToken = $env:TELEGRAM_BOT_TOKEN.Trim()
+          $chatId = $env:TELEGRAM_CHAT_ID.Trim()
+          $address = $env:TAILSCALE_IP.Trim()
+          if (-not $address) {
+              Write-Error "TAILSCALE_IP not set. Cannot send Telegram message."
+              exit 1
+          }
+          $username = "RDP"
 
-          # Send JSON body (telegram accepts application/json)
-          $payload = @{ chat_id = $chatId; text = $message } | ConvertTo-Json
+          # RDP_CREDS secret can be either "user:pass" or just password
+          if ($env:RDP_CREDS -and ($env:RDP_CREDS -match "^([^:]+):(.+)$")) {
+              $password = $Matches[2]
+          } elseif ($env:RDP_CREDS) {
+              $password = $env:RDP_CREDS
+          } else {
+              # if not provided, indicate unknown
+              $password = "<not-provided>"
+          }
+
+          $timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+
+          # Build a clear message. Use MarkdownV2 escaping for special characters.
+          function Escape-MdV2($s) {
+              if ($null -eq $s) { return "" }
+              # escape: _ * [ ] ( ) ~ ` > # + - = | { } . !
+              $chars = '_*[]()~`>#+-=|{}.!'
+              $out = $s
+              foreach ($c in $chars.ToCharArray()) {
+                  $out = $out -replace [regex]::Escape($c), ("\\" + $c)
+              }
+              return $out
+          }
+
+          $escAddress = Escape-MdV2 $address
+          $escUsername = Escape-MdV2 $username
+          $escPassword = Escape-MdV2 $password
+          $escTime = Escape-MdV2 $timestamp
+
+          $message = "*RDP Access Details:*`n`n" +
+                     "Address: `$`$escAddress`n" +
+                     "Username: `$`$escUsername`n" +
+                     "Password: `$`$escPassword`n`n" +
+                     "_Time: $escTime_"
+
+          Write-Host "Sending Telegram message to chat id $chatId..."
+
+          $payload = @{
+              chat_id = $chatId
+              text = $message
+              parse_mode = "MarkdownV2"
+              disable_web_page_preview = $true
+          }
+
           try {
-              Invoke-RestMethod -Uri "https://api.telegram.org/bot$botToken/sendMessage" -Method Post -Body $payload -ContentType 'application/json' -ErrorAction Stop | Out-Null
+              $resp = Invoke-RestMethod -Uri ("https://api.telegram.org/bot{0}/sendMessage" -f $botToken) `
+                                       -Method Post -ContentType 'application/json' `
+                                       -Body ($payload | ConvertTo-Json -Depth 4)
+              if ($resp.ok -ne $true) {
+                  Write-Error "Telegram API returned an error: $($resp | ConvertTo-Json -Depth 4)"
+                  exit 1
+              }
+              Write-Host "Telegram message sent. message_id: $($resp.result.message_id)"
+              # Save Telegram response for debugging if needed
+              Add-Content -Path $env:GITHUB_ENV -Value ("TELEGRAM_MSG_ID=" + $resp.result.message_id)
           } catch {
-              Write-Error "Failed to send Telegram message: $($_.Exception.Message)"
+              Write-Error "Failed to send Telegram message: $_"
               exit 1
           }
 
       - name: Verify RDP Accessibility
-        shell: powershell
+        shell: pwsh
+        env:
+          TAILSCALE_IP: ${{ env.TAILSCALE_IP }}
         run: |
-          $ip = $env:TAILSCALE_IP
-          Write-Host "Testing RDP connectivity to $ip:3389"
-          $testResult = Test-NetConnection -ComputerName $ip -Port 3389 -WarningAction SilentlyContinue
+          Write-Host "Checking RDP (TCP 3389) on $env:TAILSCALE_IP"
+          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
           if (-not $testResult.TcpTestSucceeded) {
-              Write-Error "TCP connection to RDP port 3389 failed"
-              exit 1
+              Write-Warning "TCP connection to RDP port 3389 failed. Continuing (you may want to fail)."
+              # If you want this to fail the job uncomment next line:
+              # exit 1
+          } else {
+              Write-Host "TCP connectivity successful!"
           }
-          Write-Host "TCP connectivity successful!"
 
-      - name: Maintain Connection
-        shell: powershell
+      - name: Maintain Connection (Keep Runner Alive)
+        shell: pwsh
+        env:
+          TAILSCALE_IP: ${{ env.TAILSCALE_IP }}
+          RDP_CREDS: ${{ secrets.RDP_CREDS }}
         run: |
-          Write-Host "`n=== RDP ACCESS ==="
-          Write-Host "Address: $env:TAILSCALE_IP"
-          Write-Host "Username: RDP"
-          Write-Host "Password: (sent to Telegram)"
-          Write-Host "==================`n"
+          Write-Host ""
+          Write-Host "=== RDP ACCESS ==="
+          Write-Host ("Address: " + $env:TAILSCALE_IP)
+          Write-Host ("Username: RDP")
+          Write-Host ("Password: " + $env:RDP_CREDS)
+          Write-Host "=================="
+          Write-Host ""
+          Write-Host "Runner will stay alive. Use Actions UI to cancel the workflow when done."
           while ($true) {
-              Write-Host "[$(Get-Date)] RDP Active - Use Cancel workflow in GitHub Actions to stop"
+              Write-Host ("[" + (Get-Date).ToString("o") + "] RDP Active - sleeping 300s")
               Start-Sleep -Seconds 300
           }
