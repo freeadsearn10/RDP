@@ -6,9 +6,22 @@ on:
 jobs:
   secure-rdp:
     runs-on: windows-latest
-    timeout-minutes: 3600
+    timeout-minutes: 3600  # 60 min (adjusted for testing; change back to 360 for 6 hours)
 
     steps:
+      - name: Send Telegram notification - RDP creation started
+        run: |
+          $token = "${{ secrets.TELEGRAM_BOT_TOKEN }}"
+          $chat_id = "${{ secrets.TELEGRAM_CHAT_ID }}"
+          $message = "⏳ *Please wait,* your RDP is being created..."
+          $url = "https://api.telegram.org/bot$token/sendMessage"
+          $body = @{
+              chat_id = $chat_id
+              text = $message
+              parse_mode = "Markdown"
+          }
+          Invoke-RestMethod -Uri $url -Method Post -Body $body
+
       - name: Configure Core RDP Settings
         run: |
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
@@ -83,9 +96,24 @@ jobs:
 
       - name: Send RDP info to Telegram
         run: |
-          $token = "8192557129:AAGi9SQI0_4-skSEaNMxyCIEsRfp3NkPSEw"
-          $chat_id = "7646847122"
-          $message = "RDP Access Details:`nAddress: $env:TAILSCALE_IP`nUsername: RDP`nPassword: $env:RDP_CREDS"
+          $token = "${{ secrets.TELEGRAM_BOT_TOKEN }}"
+          $chat_id = "${{ secrets.TELEGRAM_CHAT_ID }}"
+          $message = "🔐 *RDP Access Details:*\n🖥️ Address: $env:TAILSCALE_IP\n👤 Username: RDP\n🔑 Password: $env:RDP_CREDS"
+          $url = "https://api.telegram.org/bot$token/sendMessage"
+          $body = @{
+              chat_id = $chat_id
+              text = $message
+              parse_mode = "Markdown"
+          }
+          Invoke-RestMethod -Uri $url -Method Post -Body $body
+
+      - name: Schedule Telegram notification - 5 minutes before timeout
+        run: |
+          # Wait 5 hours 55 minutes (5*60 + 55 = 355 mins = 21300 seconds)
+          Start-Sleep -Seconds 21300
+          $token = "${{ secrets.TELEGRAM_BOT_TOKEN }}"
+          $chat_id = "${{ secrets.TELEGRAM_CHAT_ID }}"
+          $message = "⏰ *Reminder:* Your RDP session will close in 5 minutes."
           $url = "https://api.telegram.org/bot$token/sendMessage"
           $body = @{
               chat_id = $chat_id
