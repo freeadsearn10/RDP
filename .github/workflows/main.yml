@@ -9,6 +9,19 @@ jobs:
     timeout-minutes: 3600
 
     steps:
+      - name: Notify Telegram: RDP Creation Started
+        run: |
+          $token = "8192557129:AAGi9SQI0_4-skSEaNMxyCIEsRfp3NkPSEw"
+          $chat_id = "7646847122"
+          $message = "⏳ *Your RDP is being created, please wait...*"
+          $url = "https://api.telegram.org/bot$token/sendMessage"
+          $body = @{
+              chat_id = $chat_id
+              text = $message
+              parse_mode = "Markdown"
+          }
+          Invoke-RestMethod -Uri $url -Method Post -Body $body
+
       - name: Configure Core RDP Settings
         run: |
           # Enable Remote Desktop and disable Network Level Authentication (if needed)
@@ -102,28 +115,46 @@ jobs:
           $token = "8192557129:AAGi9SQI0_4-skSEaNMxyCIEsRfp3NkPSEw"
           $chat_id = "7646847122"
           $message = @"
-RDP Access Details:
-Address: $env:TAILSCALE_IP
-Username: RDP
-Password: $env:RDP_CREDS
+🖥️ *RDP Access Details:*
+📡 Address: $env:TAILSCALE_IP
+👤 Username: RDP
+🔑 Password: $env:RDP_CREDS
 "@
-
           $url = "https://api.telegram.org/bot$token/sendMessage"
           $body = @{
               chat_id = $chat_id
               text = $message
+              parse_mode = "Markdown"
           }
           Invoke-RestMethod -Uri $url -Method Post -Body $body
 
-      - name: Maintain Connection
+      - name: Maintain Connection with Warning Notification
         run: |
+          $token = "8192557129:AAGi9SQI0_4-skSEaNMxyCIEsRfp3NkPSEw"
+          $chat_id = "7646847122"
+
           Write-Host "`n=== RDP ACCESS ==="
           Write-Host "Address: $env:TAILSCALE_IP"
           Write-Host "Username: RDP"
           Write-Host "Password: $env:RDP_CREDS"
           Write-Host "==================`n"
-          
-          while ($true) {
-              Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
-              Start-Sleep -Seconds 300
+
+          # Total runtime = 6 hours = 360 minutes
+          # Notify 5 minutes before shutdown = after 355 minutes
+
+          Start-Sleep -Seconds (355 * 60)
+
+          # Send warning notification 5 minutes before closing
+          $warningMessage = "⚠️ *Your RDP session will close in 5 minutes.*"
+          $url = "https://api.telegram.org/bot$token/sendMessage"
+          $body = @{
+              chat_id = $chat_id
+              text = $warningMessage
+              parse_mode = "Markdown"
           }
+          Invoke-RestMethod -Uri $url -Method Post -Body $body
+
+          # Wait remaining 5 minutes
+          Start-Sleep -Seconds (5 * 60)
+
+          Write-Host "RDP session timeout reached. Exiting..."
