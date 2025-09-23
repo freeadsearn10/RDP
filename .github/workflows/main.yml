@@ -84,7 +84,7 @@ jobs:
           
           if (-not $tsIP) {
               Write-Error "Tailscale IP not assigned. Exiting."
-              exit 1
+            exit 1
           }
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
       
@@ -95,8 +95,8 @@ jobs:
           # Test connectivity using Test-NetConnection against the Tailscale IP on port 3389
           $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
           if (-not $testResult.TcpTestSucceeded) {
-              Write-Error "TCP connection to RDP port 3389 failed"
-              exit 1
+            Write-Error "TCP connection to RDP port 3389 failed"
+            exit 1
           }
           Write-Host "TCP connectivity successful!"
 
@@ -109,28 +109,26 @@ jobs:
           # Get current timestamp for the message
           $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
           
-          # Create stylish message with emojis
-          $message = @"
-🔒 *RDP ACCESS DETAILS* 🔒
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🌐 *Address*: $env:TAILSCALE_IP
-👤 *Username*: $env:RDP_USER
-🔑 *Password*: $env:RDP_PASSWORD
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-⏰ *Created*: $timestamp
-🖥️ *OS*: Windows Latest
-🔧 *Status*: Active
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-💡 *Instructions*: 
-1. Use Remote Desktop Client
-2. Enter the address above
-3. Use provided credentials
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-⚠️ *Note*: 
-- This session will expire in 6 hours
-- Do not share these credentials
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-"@
+          # Create stylish message with emojis - using string concatenation
+          $message = "🔒 *RDP ACCESS DETAILS* 🔒`n"
+          $message += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`n"
+          $message += "🌐 *Address*: $env:TAILSCALE_IP`n"
+          $message += "👤 *Username*: $env:RDP_USER`n"
+          $message += "🔑 *Password*: $env:RDP_PASSWORD`n"
+          $message += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`n"
+          $message += "⏰ *Created*: $timestamp`n"
+          $message += "🖥️ *OS*: Windows Latest`n"
+          $message += "🔧 *Status*: Active`n"
+          $message += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`n"
+          $message += "💡 *Instructions*:`n"
+          $message += "1. Use Remote Desktop Client`n"
+          $message += "2. Enter the address above`n"
+          $message += "3. Use provided credentials`n"
+          $message += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`n"
+          $message += "⚠️ *Note*:`n"
+          $message += "- This session will expire in 6 hours`n"
+          $message += "- Do not share these credentials`n"
+          $message += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           
           Write-Host "Message content: $message"
           
