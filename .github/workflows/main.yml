@@ -111,13 +111,8 @@ jobs:
           Write-Host "RDP_USER: '$env:RDP_USER'"
           Write-Host "RDP_PASSWORD is set: $(-not [string]::IsNullOrEmpty($env:RDP_PASSWORD))"
           
-          # Prepare message using here-string for better handling
-          $message = @"
-RDP Access Details:
-Address: $env:TAILSCALE_IP
-Username: $env:RDP_USER
-Password: $env:RDP_PASSWORD
-"@
+          # Prepare message using string concatenation
+          $message = "RDP Access Details:`nAddress: $env:TAILSCALE_IP`nUsername: $env:RDP_USER`nPassword: $env:RDP_PASSWORD"
           
           Write-Host "Message content: $message"
           
